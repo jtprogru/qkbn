@@ -3,17 +3,23 @@ package main
 import (
     "encoding/json"
     "errors"
+    "flag"
     "fmt"
     "html/template"
     "net/http"
     "os"
     "path/filepath"
     "sort"
+    "strconv"
     "strings"
 )
 
 const (
-    todoDir = "~/.qwen/todos/"
+    defaultPort     = 9090
+    defaultTodoDir  = "~/.qwen/todos/"
+    minPort         = 1
+    maxPort         = 65535
+
     htmlTemplate = `
 <!DOCTYPE html>
 <html>
@@ -43,6 +49,9 @@ const (
 `
 )
 
+//nolint:gochecknoglobals // Глобальная переменная для передачи директории в хендлер
+var todoDir = defaultTodoDir
+
 type Task struct {
     Content    string `json:"content"`
     ActiveForm string `json:"activeForm"`
@@ -57,6 +66,14 @@ type PageData struct {
     Pending   template.HTML
     InProgress template.HTML
     Completed  template.HTML
+}
+
+func validatePort(port int) error {
+    if port < minPort || port > maxPort {
+        return fmt.Errorf("port must be between %d and %d", minPort, maxPort)
+    }
+
+    return nil
 }
 
 func expandPath(path string) string {
@@ -194,11 +211,40 @@ func kanbanHandler(w http.ResponseWriter, _ *http.Request) {
 }
 
 func main() {
+    port := flag.Int("port", defaultPort, "Port to run the web server on")
+    flag.IntVar(port, "p", defaultPort, "Shorthand for -port")
+
+    todosDir := flag.String("todos-dir", defaultTodoDir, "Directory containing Qwen-code todo JSON files")
+    flag.StringVar(todosDir, "d", defaultTodoDir, "Shorthand for -todos-dir")
+
+    flag.Parse()
+
+    // Валидация порта
+    portErr := validatePort(*port)
+    if portErr != nil {
+        fmt.Fprintf(os.Stderr, "Error: %v\n", portErr)
+        os.Exit(1)
+    }
+
+    // Проверка директории
+    expandedDir := expandPath(*todosDir)
+
+    _, statErr := os.Stat(expandedDir)
+    if os.IsNotExist(statErr) {
+        fmt.Fprintf(os.Stderr, "Error: directory %s does not exist\n", expandedDir)
+        os.Exit(1)
+    }
+
+    // Устанавливаем глобальную переменную для хендлера
+    todoDir = *todosDir
+
     http.HandleFunc("/", kanbanHandler)
 
-    fmt.Println("🚀 Local Kanban is running! Open http://localhost:9090 in your browser.")
+    addr := ":" + strconv.Itoa(*port)
+
+    fmt.Printf("🚀 Local Kanban is running! Open http://localhost:%d in your browser.\n", *port)
     //nolint:gosec,noinlineerr // Локальный сервер без внешних подключений, таймауты не критичны
-    if err := http.ListenAndServe(":9090", nil); err != nil {
+    if err := http.ListenAndServe(addr, nil); err != nil {
         fmt.Printf("Server error: %v\n", err)
         os.Exit(1)
     }

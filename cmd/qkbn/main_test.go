@@ -8,6 +8,59 @@ import (
 	"time"
 )
 
+func TestValidatePort(t *testing.T) {
+	tests := []struct {
+		name    string
+		port    int
+		wantErr bool
+	}{
+		{
+			name:    "valid default port",
+			port:    9090,
+			wantErr: false,
+		},
+		{
+			name:    "valid min port",
+			port:    1,
+			wantErr: false,
+		},
+		{
+			name:    "valid max port",
+			port:    65535,
+			wantErr: false,
+		},
+		{
+			name:    "port below minimum",
+			port:    0,
+			wantErr: true,
+		},
+		{
+			name:    "port above maximum",
+			port:    65536,
+			wantErr: true,
+		},
+		{
+			name:    "negative port",
+			port:    -1,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePort(tt.port)
+
+			if tt.wantErr && err == nil {
+				t.Errorf("validatePort(%d) expected error, got nil", tt.port)
+			}
+
+			if !tt.wantErr && err != nil {
+				t.Errorf("validatePort(%d) unexpected error = %v", tt.port, err)
+			}
+		})
+	}
+}
+
 func TestExpandPath(t *testing.T) {
 	tests := []struct {
 		name     string
