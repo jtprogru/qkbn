@@ -1,12 +1,20 @@
 package qkbnhttp
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+// fileExists проверяет существование файла.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
 
 func TestExpandPath(t *testing.T) {
 	tests := []struct {
@@ -377,6 +385,514 @@ func TestProcessSessionFile(t *testing.T) {
 		// hasActiveTasks должен вернуть false
 		if server.hasActiveTasks(result) {
 			t.Error("hasActiveTasks() should return false for completed-only session")
+		}
+	})
+}
+
+func TestNewServer(t *testing.T) {
+	// Получаем корень проекта (на два уровня выше от директории теста)
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
+
+	// Находим корень проекта (где лежит go.mod)
+	projectRoot := wd
+	for !fileExists(filepath.Join(projectRoot, "go.mod")) {
+		projectRoot = filepath.Dir(projectRoot)
+		if projectRoot == "/" {
+			t.Fatal("Could not find project root (go.mod not found)")
+		}
+	}
+
+	// Меняем рабочую директорию на корень проекта
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get current directory: %v", err)
+	}
+	err = os.Chdir(projectRoot)
+	if err != nil {
+		t.Fatalf("Failed to change to project root: %v", err)
+	}
+	defer os.Chdir(oldWd) //nolint:errcheck // Восстанавливаем директорию
+
+	tmpDir := t.TempDir()
+
+	// Создаём тестовый JSON-файл
+	jsonContent := `{
+		"sessionId": "test-session",
+		"todos": [
+			{"content": "Task 1", "status": "pending"}
+		]
+	}`
+	err = os.WriteFile(filepath.Join(tmpDir, "test.json"), []byte(jsonContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	t.Run("successful server creation", func(t *testing.T) {
+		server, err := NewServer(tmpDir, time.Second*2, 5)
+		if err != nil {
+			t.Fatalf("NewServer() error = %v", err)
+		}
+		defer server.Stop()
+
+		if server == nil {
+			t.Error("NewServer() returned nil server")
+		}
+	})
+
+	t.Run("invalid template path", func(t *testing.T) {
+		// Временно переименовываем шаблон
+		origPath := filepath.Join("templates", "kanban.html")
+		tmpPath := filepath.Join("templates", "kanban.html.bak")
+
+		// Проверяем, существует ли оригинальный файл
+		if _, err := os.Stat(origPath); err == nil {
+			// Переименовываем
+			os.Rename(origPath, tmpPath) //nolint:errcheck // Тест
+			defer os.Rename(tmpPath, origPath) //nolint:errcheck // Тест
+		} else {
+			t.Skip("Template file not found, skipping test")
+		}
+
+		_, err := NewServer(tmpDir, time.Second*2, 5)
+		if err == nil {
+			t.Error("NewServer() expected error for missing template")
+		}
+	})
+
+	t.Run("non-existent todo directory", func(t *testing.T) {
+		server, err := NewServer("/non/existent/path", time.Second*2, 5)
+		if err != nil {
+			// Ожидаем ошибку при загрузке кэша
+			if !strings.Contains(err.Error(), "refresh sessions cache") {
+				t.Errorf("NewServer() unexpected error = %v", err)
+			}
+		}
+		if server != nil {
+			server.Stop()
+		}
+	})
+}
+
+func TestLoadTemplate(t *testing.T) {
+	// Меняем рабочую директорию на корень проекта
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
+
+	projectRoot := wd
+	for !fileExists(filepath.Join(projectRoot, "go.mod")) {
+		projectRoot = filepath.Dir(projectRoot)
+		if projectRoot == "/" {
+			t.Fatal("Could not find project root (go.mod not found)")
+		}
+	}
+
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get current directory: %v", err)
+	}
+	err = os.Chdir(projectRoot)
+	if err != nil {
+		t.Fatalf("Failed to change to project root: %v", err)
+	}
+	defer os.Chdir(oldWd) //nolint:errcheck // Восстанавливаем директорию
+
+	tmpDir := t.TempDir()
+
+	server := &Server{
+		todoDir:           tmpDir,
+		refreshInterval:   time.Second * 2,
+		uiRefreshInterval: 5,
+		stopRefresh:       make(chan struct{}),
+	}
+
+	t.Run("load existing template", func(t *testing.T) {
+		err := server.loadTemplate()
+		if err != nil {
+			t.Errorf("loadTemplate() error = %v", err)
+		}
+
+		if server.template == nil {
+			t.Error("loadTemplate() did not set template")
+		}
+	})
+
+	t.Run("load non-existent template", func(t *testing.T) {
+		// Временно переименовываем шаблон
+		origPath := filepath.Join("templates", "kanban.html")
+		tmpPath := filepath.Join("templates", "kanban.html.bak")
+
+		if _, err := os.Stat(origPath); err == nil {
+			os.Rename(origPath, tmpPath) //nolint:errcheck // Тест
+			defer os.Rename(tmpPath, origPath) //nolint:errcheck // Тест
+		} else {
+			t.Skip("Template file not found, skipping test")
+		}
+
+		err := server.loadTemplate()
+		if err == nil {
+			t.Error("loadTemplate() expected error for missing template")
+		}
+	})
+}
+
+func TestRefreshSessionsCache(t *testing.T) {
+	// Меняем рабочую директорию на корень проекта
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
+
+	projectRoot := wd
+	for !fileExists(filepath.Join(projectRoot, "go.mod")) {
+		projectRoot = filepath.Dir(projectRoot)
+		if projectRoot == "/" {
+			t.Fatal("Could not find project root (go.mod not found)")
+		}
+	}
+
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get current directory: %v", err)
+	}
+	err = os.Chdir(projectRoot)
+	if err != nil {
+		t.Fatalf("Failed to change to project root: %v", err)
+	}
+	defer os.Chdir(oldWd) //nolint:errcheck // Восстанавливаем директорию
+
+	tmpDir := t.TempDir()
+
+	t.Run("cache with active sessions", func(t *testing.T) {
+		jsonContent := `{
+			"sessionId": "active-session",
+			"todos": [
+				{"content": "Task 1", "status": "pending"}
+			]
+		}`
+		err = os.WriteFile(filepath.Join(tmpDir, "active.json"), []byte(jsonContent), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+
+		server := &Server{
+			todoDir:           tmpDir,
+			refreshInterval:   time.Second * 2,
+			uiRefreshInterval: 5,
+			stopRefresh:       make(chan struct{}),
+		}
+
+		err = server.loadTemplate()
+		if err != nil {
+			t.Fatalf("loadTemplate() error = %v", err)
+		}
+
+		err = server.refreshSessionsCache()
+		if err != nil {
+			t.Errorf("refreshSessionsCache() error = %v", err)
+		}
+
+		server.cacheMu.RLock()
+		cacheLen := len(server.sessionsCache)
+		server.cacheMu.RUnlock()
+
+		if cacheLen != 1 {
+			t.Errorf("refreshSessionsCache() expected 1 session, got %d", cacheLen)
+		}
+	})
+
+	t.Run("cache filters completed-only sessions", func(t *testing.T) {
+		tmpDir2 := t.TempDir()
+
+		jsonContent := `{
+			"sessionId": "completed-session",
+			"todos": [
+				{"content": "Task 1", "status": "completed"}
+			]
+		}`
+		err := os.WriteFile(filepath.Join(tmpDir2, "completed.json"), []byte(jsonContent), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+
+		server := &Server{
+			todoDir:           tmpDir2,
+			refreshInterval:   time.Second * 2,
+			uiRefreshInterval: 5,
+			stopRefresh:       make(chan struct{}),
+		}
+
+		err = server.loadTemplate()
+		if err != nil {
+			t.Fatalf("loadTemplate() error = %v", err)
+		}
+
+		err = server.refreshSessionsCache()
+		if err != nil {
+			t.Errorf("refreshSessionsCache() error = %v", err)
+		}
+
+		server.cacheMu.RLock()
+		cacheLen := len(server.sessionsCache)
+		server.cacheMu.RUnlock()
+
+		if cacheLen != 0 {
+			t.Errorf("refreshSessionsCache() expected 0 sessions (all completed), got %d", cacheLen)
+		}
+	})
+
+	t.Run("cache with non-existent directory", func(t *testing.T) {
+		server := &Server{
+			todoDir:           "/non/existent/path",
+			refreshInterval:   time.Second * 2,
+			uiRefreshInterval: 5,
+			stopRefresh:       make(chan struct{}),
+		}
+
+		err := server.refreshSessionsCache()
+		if err == nil {
+			t.Error("refreshSessionsCache() expected error for non-existent directory")
+		}
+	})
+}
+
+func TestKanbanHandler(t *testing.T) {
+	// Меняем рабочую директорию на корень проекта
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
+
+	projectRoot := wd
+	for !fileExists(filepath.Join(projectRoot, "go.mod")) {
+		projectRoot = filepath.Dir(projectRoot)
+		if projectRoot == "/" {
+			t.Fatal("Could not find project root (go.mod not found)")
+		}
+	}
+
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get current directory: %v", err)
+	}
+	err = os.Chdir(projectRoot)
+	if err != nil {
+		t.Fatalf("Failed to change to project root: %v", err)
+	}
+	defer os.Chdir(oldWd) //nolint:errcheck // Восстанавливаем директорию
+
+	tmpDir := t.TempDir()
+
+	t.Run("handler returns active sessions", func(t *testing.T) {
+		jsonContent := `{
+			"sessionId": "test-session",
+			"todos": [
+				{"content": "Task 1", "status": "pending"}
+			]
+		}`
+		err = os.WriteFile(filepath.Join(tmpDir, "test.json"), []byte(jsonContent), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+
+		server, err := NewServer(tmpDir, time.Second*2, 5)
+		if err != nil {
+			t.Fatalf("NewServer() error = %v", err)
+		}
+		defer server.Stop()
+
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		w := httptest.NewRecorder()
+
+		server.KanbanHandler(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("KanbanHandler() status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+
+		body := w.Body.String()
+		if !strings.Contains(body, "test-session") {
+			t.Error("KanbanHandler() response should contain session ID")
+		}
+	})
+
+	t.Run("handler returns message for non-existent directory", func(t *testing.T) {
+		server := &Server{
+			todoDir:           "/non/existent/path",
+			refreshInterval:   time.Second * 2,
+			uiRefreshInterval: 5,
+			stopRefresh:       make(chan struct{}),
+		}
+
+		err := server.loadTemplate()
+		if err != nil {
+			t.Fatalf("loadTemplate() error = %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		w := httptest.NewRecorder()
+
+		server.KanbanHandler(w, req)
+
+		body := w.Body.String()
+		if !strings.Contains(body, "not found") {
+			t.Error("KanbanHandler() should return 'not found' message")
+		}
+	})
+
+	t.Run("handler returns message for no active sessions", func(t *testing.T) {
+		tmpDir2 := t.TempDir()
+
+		jsonContent := `{
+			"sessionId": "completed-session",
+			"todos": [
+				{"content": "Task 1", "status": "completed"}
+			]
+		}`
+		err := os.WriteFile(filepath.Join(tmpDir2, "completed.json"), []byte(jsonContent), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+
+		server, err := NewServer(tmpDir2, time.Second*2, 5)
+		if err != nil {
+			t.Fatalf("NewServer() error = %v", err)
+		}
+		defer server.Stop()
+
+		// Ждём обновления кэша
+		time.Sleep(time.Millisecond * 100)
+
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		w := httptest.NewRecorder()
+
+		server.KanbanHandler(w, req)
+
+		body := w.Body.String()
+		if !strings.Contains(body, "No active sessions found") {
+			t.Error("KanbanHandler() should return 'No active sessions found' message")
+		}
+	})
+}
+
+func TestStop(t *testing.T) {
+	// Меняем рабочую директорию на корень проекта
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
+
+	projectRoot := wd
+	for !fileExists(filepath.Join(projectRoot, "go.mod")) {
+		projectRoot = filepath.Dir(projectRoot)
+		if projectRoot == "/" {
+			t.Fatal("Could not find project root (go.mod not found)")
+		}
+	}
+
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get current directory: %v", err)
+	}
+	err = os.Chdir(projectRoot)
+	if err != nil {
+		t.Fatalf("Failed to change to project root: %v", err)
+	}
+	defer os.Chdir(oldWd) //nolint:errcheck // Восстанавливаем директорию
+
+	tmpDir := t.TempDir()
+
+	// Создаём тестовый JSON-файл, чтобы NewServer не упал при загрузке кэша
+	jsonContent := `{
+		"sessionId": "test-session",
+		"todos": [
+			{"content": "Task 1", "status": "pending"}
+		]
+	}`
+	err = os.WriteFile(filepath.Join(tmpDir, "test.json"), []byte(jsonContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	server, err := NewServer(tmpDir, time.Second*2, 5)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	// Stop должен закрывать канал stopRefresh
+	server.Stop()
+
+	// Проверяем, что канал закрыт
+	select {
+	case _, ok := <-server.stopRefresh:
+		if ok {
+			t.Error("Stop() did not close stopRefresh channel")
+		}
+	default:
+		t.Error("Stop() channel should be closed")
+	}
+}
+
+func TestHasActiveTasks(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	server := &Server{
+		todoDir:           tmpDir,
+		refreshInterval:   time.Second * 2,
+		uiRefreshInterval: 5,
+		stopRefresh:       make(chan struct{}),
+	}
+
+	t.Run("session with pending tasks", func(t *testing.T) {
+		session := SessionData{
+			Pending:    "<div>Task</div>",
+			InProgress: "",
+			Completed:  "",
+		}
+
+		if !server.hasActiveTasks(session) {
+			t.Error("hasActiveTasks() should return true for pending tasks")
+		}
+	})
+
+	t.Run("session with in_progress tasks", func(t *testing.T) {
+		session := SessionData{
+			Pending:    "",
+			InProgress: "<div>Task</div>",
+			Completed:  "",
+		}
+
+		if !server.hasActiveTasks(session) {
+			t.Error("hasActiveTasks() should return true for in_progress tasks")
+		}
+	})
+
+	t.Run("session with only completed tasks", func(t *testing.T) {
+		session := SessionData{
+			Pending:    "",
+			InProgress: "",
+			Completed:  "<div>Task</div>",
+		}
+
+		if server.hasActiveTasks(session) {
+			t.Error("hasActiveTasks() should return false for completed-only tasks")
+		}
+	})
+
+	t.Run("empty session", func(t *testing.T) {
+		session := SessionData{
+			Pending:    "",
+			InProgress: "",
+			Completed:  "",
+		}
+
+		if server.hasActiveTasks(session) {
+			t.Error("hasActiveTasks() should return false for empty session")
 		}
 	})
 }
