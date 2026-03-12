@@ -16,13 +16,14 @@ import (
 
 // Server представляет HTTP-сервер с Kanban-доской.
 type Server struct {
-	todoDir        string
-	template       *template.Template
-	mu             sync.RWMutex
-	sessionsCache  []SessionData
-	cacheMu        sync.RWMutex
-	refreshInterval time.Duration
-	stopRefresh    chan struct{}
+	todoDir           string
+	template          *template.Template
+	mu                sync.RWMutex
+	sessionsCache     []SessionData
+	cacheMu           sync.RWMutex
+	refreshInterval   time.Duration
+	uiRefreshInterval int
+	stopRefresh       chan struct{}
 }
 
 // Task представляет задачу из JSON-файла.
@@ -48,15 +49,17 @@ type SessionData struct {
 
 // PageData представляет данные для шаблона страницы.
 type PageData struct {
-	Sessions []SessionData
+	Sessions          []SessionData
+	UIRefreshInterval int
 }
 
 // NewServer создаёт новый сервер с заданной директорией задач.
-func NewServer(todoDir string, refreshInterval time.Duration) (*Server, error) {
+func NewServer(todoDir string, refreshInterval time.Duration, uiRefreshInterval int) (*Server, error) {
 	s := &Server{
-		todoDir:         todoDir,
-		refreshInterval: refreshInterval,
-		stopRefresh:     make(chan struct{}),
+		todoDir:           todoDir,
+		refreshInterval:   refreshInterval,
+		uiRefreshInterval: uiRefreshInterval,
+		stopRefresh:       make(chan struct{}),
 	}
 
 	if err := s.loadTemplate(); err != nil {
@@ -102,7 +105,8 @@ func (s *Server) KanbanHandler(w http.ResponseWriter, _ *http.Request) {
 	s.mu.RUnlock()
 
 	pageData := PageData{
-		Sessions: sessions,
+		Sessions:          sessions,
+		UIRefreshInterval: s.uiRefreshInterval,
 	}
 
 	err = tmpl.Execute(w, pageData)

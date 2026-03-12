@@ -14,13 +14,14 @@ import (
 )
 
 const (
-	defaultPort         = 9090
-	defaultTodoDir      = "~/.qwen/todos/"
-	defaultRefreshSec   = 120 // 2 минуты
-	minPort             = 1
-	maxPort             = 65535
-	minRefreshInterval  = 10 * time.Second
-	defaultRefreshInterval = time.Duration(defaultRefreshSec) * time.Second
+	defaultPort          = 9090
+	defaultTodoDir       = "~/.qwen/todos/"
+	defaultRefreshSec    = 120 // 2 минуты
+	defaultUIRefreshSec  = 5   // 5 секунд
+	minPort              = 1
+	maxPort              = 65535
+	minRefreshInterval   = 10  // 10 секунд
+	minUIRefreshInterval = 1   // 1 секунда
 )
 
 func validatePort(port int) error {
@@ -31,9 +32,17 @@ func validatePort(port int) error {
 	return nil
 }
 
-func validateRefreshInterval(d time.Duration) error {
-	if d < minRefreshInterval {
-		return fmt.Errorf("refresh interval must be at least %v", minRefreshInterval)
+func validateRefreshInterval(sec int) error {
+	if sec < minRefreshInterval {
+		return fmt.Errorf("refresh interval must be at least %d seconds", minRefreshInterval)
+	}
+
+	return nil
+}
+
+func validateUIRefreshInterval(sec int) error {
+	if sec < minUIRefreshInterval {
+		return fmt.Errorf("ui refresh interval must be at least %d second", minUIRefreshInterval)
 	}
 
 	return nil
@@ -46,8 +55,11 @@ func main() {
 	todosDir := flag.String("todos-dir", defaultTodoDir, "Directory containing Qwen-code todo JSON files")
 	flag.StringVar(todosDir, "d", defaultTodoDir, "Shorthand for -todos-dir")
 
-	refreshInterval := flag.Duration("refresh-interval", defaultRefreshInterval, "Interval for refreshing sessions cache (e.g., 2m, 120s)")
-	flag.DurationVar(refreshInterval, "r", defaultRefreshInterval, "Shorthand for -refresh-interval")
+	refreshInterval := flag.Int("refresh-interval", defaultRefreshSec, "Interval for refreshing sessions cache (in seconds)")
+	flag.IntVar(refreshInterval, "r", defaultRefreshSec, "Shorthand for -refresh-interval")
+
+	uiRefreshInterval := flag.Int("ui-refresh-interval", defaultUIRefreshSec, "Interval for UI auto-refresh in browser (in seconds)")
+	flag.IntVar(uiRefreshInterval, "u", defaultUIRefreshSec, "Shorthand for -ui-refresh-interval")
 
 	flag.Parse()
 
@@ -58,10 +70,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Валидация интервала обновления
+	// Валидация интервала обновления кэша
 	refreshErr := validateRefreshInterval(*refreshInterval)
 	if refreshErr != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", refreshErr)
+		os.Exit(1)
+	}
+
+	// Валидация интервала обновления UI
+	uiRefreshErr := validateUIRefreshInterval(*uiRefreshInterval)
+	if uiRefreshErr != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", uiRefreshErr)
 		os.Exit(1)
 	}
 
@@ -75,7 +94,7 @@ func main() {
 	}
 
 	// Создаём сервер
-	server, err := qkbnhttp.NewServer(*todosDir, *refreshInterval)
+	server, err := qkbnhttp.NewServer(*todosDir, time.Duration(*refreshInterval)*time.Second, *uiRefreshInterval)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating server: %v\n", err)
 		os.Exit(1)
@@ -98,7 +117,8 @@ func main() {
 
 	fmt.Printf("🚀 Local Kanban is running! Open http://localhost:%d in your browser.\n", *port)
 	fmt.Printf("📁 Reading sessions from: %s\n", expandedDir)
-	fmt.Printf("🔄 Refresh interval: %v\n", *refreshInterval)
+	fmt.Printf("🔄 Cache refresh interval: %d seconds\n", *refreshInterval)
+	fmt.Printf("🌐 UI refresh interval: %d seconds\n", *uiRefreshInterval)
 	//nolint:gosec,noinlineerr // Локальный сервер без внешних подключений, таймауты не критичны
 	if err := http.ListenAndServe(addr, nil); err != nil {
 		fmt.Printf("Server error: %v\n", err)

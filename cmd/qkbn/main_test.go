@@ -4,7 +4,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestValidatePort(t *testing.T) {
@@ -63,27 +62,27 @@ func TestValidatePort(t *testing.T) {
 func TestValidateRefreshInterval(t *testing.T) {
 	tests := []struct {
 		name    string
-		input   time.Duration
+		input   int
 		wantErr bool
 	}{
 		{
 			name:    "valid default interval",
-			input:   2 * time.Minute,
+			input:   120,
 			wantErr: false,
 		},
 		{
 			name:    "valid minimum interval",
-			input:   10 * time.Second,
+			input:   10,
 			wantErr: false,
 		},
 		{
 			name:    "valid large interval",
-			input:   10 * time.Minute,
+			input:   600,
 			wantErr: false,
 		},
 		{
 			name:    "interval below minimum",
-			input:   5 * time.Second,
+			input:   5,
 			wantErr: true,
 		},
 		{
@@ -93,7 +92,7 @@ func TestValidateRefreshInterval(t *testing.T) {
 		},
 		{
 			name:    "negative interval",
-			input:   -1 * time.Minute,
+			input:   -1,
 			wantErr: true,
 		},
 	}
@@ -102,7 +101,50 @@ func TestValidateRefreshInterval(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := validateRefreshInterval(tt.input)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("validateRefreshInterval(%v) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+				t.Errorf("validateRefreshInterval(%d) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateUIRefreshInterval(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   int
+		wantErr bool
+	}{
+		{
+			name:    "valid default interval",
+			input:   5,
+			wantErr: false,
+		},
+		{
+			name:    "valid minimum interval",
+			input:   1,
+			wantErr: false,
+		},
+		{
+			name:    "valid large interval",
+			input:   60,
+			wantErr: false,
+		},
+		{
+			name:    "zero interval",
+			input:   0,
+			wantErr: true,
+		},
+		{
+			name:    "negative interval",
+			input:   -1,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateUIRefreshInterval(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateUIRefreshInterval(%d) error = %v, wantErr %v", tt.input, err, tt.wantErr)
 			}
 		})
 	}
