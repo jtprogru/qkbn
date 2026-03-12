@@ -1,19 +1,12 @@
-The user wants me to create a comprehensive project summary in markdown format based on the conversation history. Let me analyze what happened in this session:
+The user wants me to create a comprehensive project summary based on the conversation history. Let me analyze what happened in this session:
 
-1. We started with a project qkbn v0.3.0 that had basic single-session Kanban board functionality
-2. We implemented multi-session support for v0.4.0
-3. Key features added:
-   - Read all JSON files from todos directory (not just latest)
-   - Filter out sessions with only completed tasks
-   - Auto-refresh sessions cache every 2 minutes (configurable)
-   - Added --refresh-interval/-r flag
-   - Graceful shutdown on SIGINT/SIGTERM
-4. Tests were added and updated
-5. Coverage is at 54%
-6. Linter passes with 0 issues
-7. Commit and tag v0.4.0 were created and pushed to remote
+1. We started with project qkbn v0.5.0 that had multi-session support with filtering and auto-refresh
+2. We worked on increasing test coverage from 54% to >60%
+3. We added comprehensive tests for the internal/qkbnhttp package
+4. Coverage increased from 54% to 72.6% (internal/qkbnhttp: 96.8%)
+5. We committed changes and created tag v0.5.1
 
-Let me create a comprehensive summary following the specified format.# Project Summary
+Let me create a structured summary following the specified format.# Project Summary
 
 ## Overall Goal
 Разработка и улучшение утилиты **qkbn** — локального Go-сервера с Kanban-доской для визуализации активных сессий Qwen-code из `~/.qwen/todos/`.
@@ -29,15 +22,24 @@ Let me create a comprehensive summary following the specified format.# Project S
 | **Главный файл** | `cmd/qkbn/main.go` |
 | **Сервер** | http://localhost:9090 (по умолчанию) |
 | **Источник данных** | `~/.qwen/todos/*.json` |
-| **Текущая версия** | v0.4.0 |
+| **Текущая версия** | v0.5.1 |
 
 ### Архитектура
 - Читает **все** JSON-файлы из директории todos (не только последний)
 - Фильтрует сессии без активных задач (pending/in_progress)
-- Автообновление кэша сессий каждые 2 минуты (настраивается)
+- Автообновление кэша сессий каждые 2 минуты (настраивается через `--refresh-interval/-r`)
 - Три колонки: TODO (pending), IN PROGRESS (in_progress), DONE (completed)
 - Использует `net/http` + `html/template`
 - Шаблон загружается из `templates/kanban.html` при запуске
+- Graceful shutdown по SIGINT/SIGTERM
+
+### CLI флаги
+```bash
+qkbn --port 9090 -p 9090              # Порт (default: 9090, min: 1, max: 65535)
+qkbn --todos-dir ~/.qwen/todos -d     # Директория сессий (default: ~/.qwen/todos/)
+qkbn --refresh-interval 120 -r 120    # Интервал обновления кэша (default: 120s, min: 10s)
+qkbn --ui-refresh-interval 5 -u 5     # Интервал автообновления UI (default: 5s, min: 1s)
+```
 
 ### Сборка и тестирование
 ```bash
@@ -49,13 +51,6 @@ task test             # go test ./...
 task test:coverage    # go test ./... -coverprofile=cover.html
 ```
 
-### CLI флаги
-```bash
-qkbn --port 9090 -p 9090              # Порт (default: 9090)
-qkbn --todos-dir ~/.qwen/todos -d     # Директория сессий (default: ~/.qwen/todos/)
-qkbn --refresh-interval 2m -r 2m      # Интервал обновления (default: 2m, min: 10s)
-```
-
 ### Линтер
 - golangci-lint с 71 активным линтером
 - Правила wsl_v5 требуют пустых строк между блоками
@@ -63,38 +58,43 @@ qkbn --refresh-interval 2m -r 2m      # Интервал обновления (d
 - Порядок методов: экспортируемые перед неэкспортируемыми (funcorder)
 
 ### Тестирование
-- Покрытие: 54% (цель >50% достигнута)
+- Покрытие: **72.6%** (цель >60% достигнута ✅)
+- `internal/qkbnhttp`: **96.8%**
+- `cmd/qkbn`: 27.3%
 - Тесты в `cmd/qkbn/main_test.go` и `internal/qkbnhttp/server_test.go`
 - Использовать `t.TempDir()` вместо `os.MkdirTemp()`
+- Для тестов с шаблоном требуется смена рабочей директории на корень проекта (где `go.mod`)
 
 ## Recent Actions
 
-### v0.4.0 — Multi-session support with filtering and auto-refresh
+### v0.5.1 — Increase test coverage to 72.6%
 
-**Реализованные функции:**
-1. Чтение всех JSON-файлов из директории todos (функция `getAllJSONFiles()`)
-2. Фильтрация сессий только с completed задачами (`hasActiveTasks()`)
-3. Кэширование сессий с автообновлением в фоне (`refreshSessionsCache()`, `startRefreshLoop()`)
-4. Флаг `--refresh-interval/-r` с валидацией (минимум 10 секунд)
-5. Graceful shutdown по SIGINT/SIGTERM
-6. Обновлён HTML-шаблон с заголовками сессий и улучшенным стилем
+**Достижения:**
+1. Добавлено 6 новых тестовых функций в `internal/qkbnhttp/server_test.go`:
+   - `TestNewServer` — 3 подтеста (успешное создание, отсутствующий шаблон, несуществующая директория)
+   - `TestLoadTemplate` — 2 подтеста (загрузка существующего/отсутствующего шаблона)
+   - `TestRefreshSessionsCache` — 3 подтеста (кэш с активными/completed сессиями, несуществующая директория)
+   - `TestKanbanHandler` — 3 HTTP-интеграционных теста (активные сессии, несуществующая директория, нет активных сессий)
+   - `TestStop` — проверка закрытия канала `stopRefresh`
+   - `TestHasActiveTasks` — 4 подтеста для всех комбинаций статусов
 
-**Изменения в коде:**
-- `internal/qkbnhttp/server.go`: добавлены поля `sessionsCache`, `cacheMu`, `refreshInterval`, `stopRefresh` в Server struct
-- `internal/qkbnhttp/server.go`: новые методы `refreshSessionsCache()`, `startRefreshLoop()`, `hasActiveTasks()`, `Stop()`
-- `cmd/qkbn/main.go`: добавлен флаг `--refresh-interval`, валидация `validateRefreshInterval()`, обработка сигналов
-- `templates/kanban.html`: цикл `{{range .Sessions}}` с заголовками сессий
+2. Добавлена helper-функция `fileExists()` для проверки существования файлов в тестах
 
-**Тесты:**
-- `TestValidateRefreshInterval` — 6 подтестов для валидации интервала
-- `TestProcessSessionFile/completed_only_session_is_filtered` — проверка фильтрации
-- `TestGetAllJSONFiles` — 3 подтеста для получения всех JSON-файлов
+3. Реализована логика смены рабочей директории на корень проекта в тестах (для доступа к шаблону `templates/kanban.html`)
+
+4. Добавлен `cover.html` в `.gitignore`
 
 **Статистика:**
-- Покрытие: 54% (internal/qkbnhttp: 54%, cmd/qkbn: 26.8%)
-- Линтер: 0 замечаний
+- Покрытие выросло с 54% до **72.6%** ✅
+- `internal/qkbnhttp`: 54% → **96.8%**
+- Добавлено 517 строк тестов
 - Все тесты проходят ✅
-- Коммит fa75612 и тег v0.4.0 отправлены в remote
+- Линтер: 0 замечаний
+- Коммит `3153787` и тег `v0.5.1` отправлены в remote
+
+### v0.5.0 — Add configurable UI refresh interval (предыдущая версия)
+- Добавлен флаг `--ui-refresh-interval/-u` для настройки интервала автообновления страницы
+- Упрощена валидация временных интервалов
 
 ## Current Plan
 
@@ -105,13 +105,27 @@ qkbn --refresh-interval 2m -r 2m      # Интервал обновления (d
 5. [DONE] Читать все JSON-файлы из директории (не только последний) — v0.4.0
 6. [DONE] Фильтровать сессии без активных задач — v0.4.0
 7. [DONE] Добавить автообновление кэша сессий — v0.4.0
-8. [TODO] Увеличить покрытие тестами (>60%)
-9. [TODO] Добавить HTTP-интеграционные тесты
-10. [TODO] Группировать задачи по проектам/workspace (если будет поддержка в Qwen-code)
-11. [TODO] Добавить сортировку сессий (по времени, по количеству задач)
-12. [TODO] Добавить поиск/фильтрацию задач на странице
+8. [DONE] Увеличить покрытие тестами (>60%) — v0.5.1 ✅
+9. [DONE] Добавить HTTP-интеграционные тесты (частично выполнено в TestKanbanHandler) — v0.5.1
+10. [TODO] **Редизайн Web UI с навигацией и группировкой по статусам** — v0.6.0
+    - [ ] Добавить навигационную панель (navbar) с логотипом и вкладками
+    - [ ] Группировать сессии: Активные / Неактивные / Завершенные
+    - [ ] Добавить pulse-индикатор для активных сессий
+    - [ ] Добавить счётчики задач в заголовки колонок
+    - [ ] Добавить кнопку "Новая задача" с подсказкой про `todowrite`
+    - [ ] Реализовать переключение вкладок на JavaScript
+    - [ ] Добавить адаптивный дизайн (mobile-friendly)
+    - [ ] Сохранить автообновление страницы (meta refresh)
+11. [TODO] Группировать задачи по проектам/workspace (если будет поддержка в Qwen-code)
+12. [TODO] Добавить сортировку сессий (по времени, по количеству задач)
+13. [TODO] Добавить поиск/фильтрацию задач на странице
 
 ---
 
 ## Summary Metadata
-**Update time**: 2026-03-12T16:31:10.869Z 
+**Update time**: 2026-03-12T17:00:00.000Z
+
+---
+
+## Summary Metadata
+**Update time**: 2026-03-12T17:35:00.000Z 
