@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidatePort(t *testing.T) {
@@ -54,6 +55,54 @@ func TestValidatePort(t *testing.T) {
 
 			if !tt.wantErr && err != nil {
 				t.Errorf("validatePort(%d) unexpected error = %v", tt.port, err)
+			}
+		})
+	}
+}
+
+func TestValidateRefreshInterval(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   time.Duration
+		wantErr bool
+	}{
+		{
+			name:    "valid default interval",
+			input:   2 * time.Minute,
+			wantErr: false,
+		},
+		{
+			name:    "valid minimum interval",
+			input:   10 * time.Second,
+			wantErr: false,
+		},
+		{
+			name:    "valid large interval",
+			input:   10 * time.Minute,
+			wantErr: false,
+		},
+		{
+			name:    "interval below minimum",
+			input:   5 * time.Second,
+			wantErr: true,
+		},
+		{
+			name:    "zero interval",
+			input:   0,
+			wantErr: true,
+		},
+		{
+			name:    "negative interval",
+			input:   -1 * time.Minute,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateRefreshInterval(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateRefreshInterval(%v) error = %v, wantErr %v", tt.input, err, tt.wantErr)
 			}
 		})
 	}
