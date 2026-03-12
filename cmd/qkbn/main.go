@@ -2,9 +2,9 @@ package main
 
 import (
     "encoding/json"
+    "errors"
     "fmt"
     "html/template"
-    "io/ioutil"
     "net/http"
     "os"
     "path/filepath"
@@ -65,19 +65,23 @@ func expandPath(path string) string {
         if err != nil {
             return path
         }
+
         return filepath.Join(home, path[2:])
     }
+
     return path
 }
 
 func getLatestFile(dir string) (string, error) {
     expandedDir := expandPath(dir)
-    files, err := ioutil.ReadDir(expandedDir)
+
+    files, err := os.ReadDir(expandedDir)
     if err != nil {
         return "", err
     }
 
-    var jsonFiles []os.FileInfo
+    var jsonFiles []os.DirEntry
+
     for _, file := range files {
         if !file.IsDir() && strings.HasSuffix(file.Name(), ".json") {
             jsonFiles = append(jsonFiles, file)
@@ -85,23 +89,28 @@ func getLatestFile(dir string) (string, error) {
     }
 
     if len(jsonFiles) == 0 {
-        return "", fmt.Errorf("no JSON files found")
+        return "", errors.New("no JSON files found")
     }
 
     // Сортируем по времени модификации
     sort.Slice(jsonFiles, func(i, j int) bool {
-        return jsonFiles[i].ModTime().After(jsonFiles[j].ModTime())
+        infoI, _ := jsonFiles[i].Info()
+        infoJ, _ := jsonFiles[j].Info()
+
+        return infoI.ModTime().After(infoJ.ModTime())
     })
 
     return filepath.Join(expandedDir, jsonFiles[0].Name()), nil
 }
 
-func kanbanHandler(w http.ResponseWriter, r *http.Request) {
+func kanbanHandler(w http.ResponseWriter, _ *http.Request) {
     w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
     // Проверяем существование директории
     expandedDir := expandPath(todoDir)
-    if _, err := os.Stat(expandedDir); os.IsNotExist(err) {
+
+    _, err := os.Stat(expandedDir)
+    if os.IsNotExist(err) {
         fmt.Fprintf(w, "Directory ~/.qwen/todos/ not found. Run qwen-code first.")
         return
     }
@@ -114,14 +123,16 @@ func kanbanHandler(w http.ResponseWriter, r *http.Request) {
     }
 
     // Читаем и парсим JSON
-    data, err := ioutil.ReadFile(latestFile)
+    data, err := os.ReadFile(latestFile)
     if err != nil {
         fmt.Fprintf(w, "Error reading file: %v", err)
         return
     }
 
     var jsonData Data
-    if err := json.Unmarshal(data, &jsonData); err != nil {
+
+    err = json.Unmarshal(data, &jsonData)
+    if err != nil {
         fmt.Fprintf(w, "Error reading JSON: %v", err)
         return
     }
@@ -134,16 +145,20 @@ func kanbanHandler(w http.ResponseWriter, r *http.Request) {
         if content == "" {
             content = "No description"
         }
+
         action := task.ActiveForm
+
         status := task.Status
         if status == "" {
             status = "pending"
         }
 
         cardHTML := fmt.Sprintf("<div class='card'><div class='card-title'>%s</div>", content)
+
         if action != "" {
             cardHTML += fmt.Sprintf("<div class='card-action'>⚡ %s</div>", action)
         }
+
         cardHTML += "</div>"
 
         switch status {
@@ -164,12 +179,16 @@ func kanbanHandler(w http.ResponseWriter, r *http.Request) {
     }
 
     pageData := PageData{
+        //nolint:gosec // HTML генерируется из доверенного источника (JSON файлы пользователя)
         Pending:    template.HTML(pending.String()),
+        //nolint:gosec // HTML генерируется из доверенного источника (JSON файлы пользователя)
         InProgress: template.HTML(inProgress.String()),
+        //nolint:gosec // HTML генерируется из доверенного источника (JSON файлы пользователя)
         Completed:  template.HTML(completed.String()),
     }
 
-    if err := tmpl.Execute(w, pageData); err != nil {
+    err = tmpl.Execute(w, pageData)
+    if err != nil {
         fmt.Fprintf(w, "Execution error: %v", err)
     }
 }
@@ -178,6 +197,7 @@ func main() {
     http.HandleFunc("/", kanbanHandler)
 
     fmt.Println("🚀 Local Kanban is running! Open http://localhost:9090 in your browser.")
+    //nolint:gosec,noinlineerr // Локальный сервер без внешних подключений, таймауты не критичны
     if err := http.ListenAndServe(":9090", nil); err != nil {
         fmt.Printf("Server error: %v\n", err)
         os.Exit(1)
