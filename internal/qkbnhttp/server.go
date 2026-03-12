@@ -41,15 +41,27 @@ type Data struct {
 
 // SessionData представляет данные одной сессии для отображения.
 type SessionData struct {
-	ID         string
-	Pending    template.HTML
-	InProgress template.HTML
-	Completed  template.HTML
+	ID           string
+	Pending      template.HTML
+	InProgress   template.HTML
+	Completed    template.HTML
+	Status       string // "active", "inactive", "completed"
+	TaskCounts   TaskCounts
+}
+
+// TaskCounts хранит счётчики задач по колонкам.
+type TaskCounts struct {
+	Pending    int
+	InProgress int
+	Completed  int
 }
 
 // PageData представляет данные для шаблона страницы.
 type PageData struct {
 	Sessions          []SessionData
+	ActiveSessions    []SessionData // pending OR in_progress
+	InactiveSessions  []SessionData // only pending, no in_progress
+	CompletedSessions []SessionData // only completed
 	UIRefreshInterval int
 }
 
@@ -84,9 +96,9 @@ func (s *Server) KanbanHandler(w http.ResponseWriter, _ *http.Request) {
 	// Проверяем существование директории
 	expandedDir := expandPath(s.todoDir)
 
-	_, err := os.Stat(expandedDir)
+	_, err := os.Stat(expandedDir) //nolint:gosec // Локальный сервер, path контролируется пользователем
 	if os.IsNotExist(err) {
-		fmt.Fprintf(w, "Directory %s not found. Run qwen-code first.", expandedDir)
+		fmt.Fprintf(w, "Directory %s not found. Run qwen-code first.", expandedDir) //nolint:gosec // Локальный сервер, XSS не применим
 		return
 	}
 
@@ -95,8 +107,22 @@ func (s *Server) KanbanHandler(w http.ResponseWriter, _ *http.Request) {
 	sessions := s.sessionsCache
 	s.cacheMu.RUnlock()
 
-	if len(sessions) == 0 {
-		fmt.Fprintf(w, "No active sessions found (sessions with only completed tasks are hidden).")
+	// Группируем сессии по статусу
+	var activeSessions, inactiveSessions, completedSessions []SessionData
+	for _, session := range sessions {
+		switch session.Status {
+		case "active":
+			activeSessions = append(activeSessions, session)
+		case "inactive":
+			inactiveSessions = append(inactiveSessions, session)
+		case "completed":
+			completedSessions = append(completedSessions, session)
+		}
+	}
+
+	// Если совсем нет сессий
+	if len(activeSessions) == 0 && len(inactiveSessions) == 0 && len(completedSessions) == 0 {
+		fmt.Fprintf(w, "No sessions found.")
 		return
 	}
 
@@ -106,6 +132,9 @@ func (s *Server) KanbanHandler(w http.ResponseWriter, _ *http.Request) {
 
 	pageData := PageData{
 		Sessions:          sessions,
+		ActiveSessions:    activeSessions,
+		InactiveSessions:  inactiveSessions,
+		CompletedSessions: completedSessions,
 		UIRefreshInterval: s.uiRefreshInterval,
 	}
 
@@ -150,10 +179,16 @@ func (s *Server) refreshSessionsCache() error {
 			continue // Пропускаем проблемные файлы
 		}
 
-		// Фильтруем сессии без активных задач
-		if s.hasActiveTasks(sessionData) {
-			sessions = append(sessions, sessionData)
+		// Определяем статус сессии и фильтруем
+		status := s.determineSessionStatus(sessionData)
+		sessionData.Status = status
+
+		// Пропускаем сессии без активных задач (только completed)
+		if status == "completed" {
+			continue
 		}
+
+		sessions = append(sessions, sessionData)
 	}
 
 	s.cacheMu.Lock()
@@ -163,10 +198,22 @@ func (s *Server) refreshSessionsCache() error {
 	return nil
 }
 
-// hasActiveTasks проверяет, есть ли в сессии задачи со статусами pending или in_progress.
-func (s *Server) hasActiveTasks(session SessionData) bool {
-	// Проверяем Pending и InProgress колонки
-	return len(string(session.Pending)) > 0 || len(string(session.InProgress)) > 0
+// determineSessionStatus определяет статус сессии на основе задач.
+func (s *Server) determineSessionStatus(session SessionData) string {
+	hasPending := len(string(session.Pending)) > 0
+	hasInProgress := len(string(session.InProgress)) > 0
+	hasCompleted := len(string(session.Completed)) > 0
+
+	switch {
+	case hasInProgress || hasPending:
+		return "active"
+	case hasPending && !hasInProgress:
+		return "inactive"
+	case hasCompleted && !hasPending && !hasInProgress:
+		return "completed"
+	default:
+		return "inactive"
+	}
 }
 
 // loadTemplate загружает HTML-шаблон из файловой системы.
@@ -285,6 +332,7 @@ func (s *Server) processSessionFile(filePath string) (SessionData, error) {
 	}
 
 	var pending, inProgress, completed strings.Builder
+	var counts TaskCounts
 
 	// Распределяем карточки по колонкам
 	for _, task := range jsonData.Todos {
@@ -311,10 +359,13 @@ func (s *Server) processSessionFile(filePath string) (SessionData, error) {
 		switch status {
 		case "pending":
 			pending.WriteString(cardHTML)
+			counts.Pending++
 		case "in_progress":
 			inProgress.WriteString(cardHTML)
+			counts.InProgress++
 		case "completed":
 			completed.WriteString(cardHTML)
+			counts.Completed++
 		}
 	}
 
@@ -330,5 +381,6 @@ func (s *Server) processSessionFile(filePath string) (SessionData, error) {
 		Pending:    template.HTML(pending.String()),    //nolint:gosec // Доверенный источник
 		InProgress: template.HTML(inProgress.String()), //nolint:gosec // Доверенный источник
 		Completed:  template.HTML(completed.String()),  //nolint:gosec // Доверенный источник
+		TaskCounts: counts,
 	}, nil
 }

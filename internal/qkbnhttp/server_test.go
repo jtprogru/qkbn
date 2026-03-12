@@ -382,9 +382,10 @@ func TestProcessSessionFile(t *testing.T) {
 			t.Error("Completed-only session should have empty InProgress")
 		}
 
-		// hasActiveTasks должен вернуть false
-		if server.hasActiveTasks(result) {
-			t.Error("hasActiveTasks() should return false for completed-only session")
+		// Проверяем статус сессии через determineSessionStatus
+		status := server.determineSessionStatus(result)
+		if status != "completed" {
+			t.Errorf("determineSessionStatus() should return 'completed' for completed-only session, got %q", status)
 		}
 	})
 }
@@ -406,15 +407,7 @@ func TestNewServer(t *testing.T) {
 	}
 
 	// Меняем рабочую директорию на корень проекта
-	oldWd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get current directory: %v", err)
-	}
-	err = os.Chdir(projectRoot)
-	if err != nil {
-		t.Fatalf("Failed to change to project root: %v", err)
-	}
-	defer os.Chdir(oldWd) //nolint:errcheck // Восстанавливаем директорию
+	t.Chdir(projectRoot)
 
 	tmpDir := t.TempDir()
 
@@ -450,8 +443,8 @@ func TestNewServer(t *testing.T) {
 		// Проверяем, существует ли оригинальный файл
 		if _, err := os.Stat(origPath); err == nil {
 			// Переименовываем
-			os.Rename(origPath, tmpPath) //nolint:errcheck // Тест
-			defer os.Rename(tmpPath, origPath) //nolint:errcheck // Тест
+			os.Rename(origPath, tmpPath) // Тест: игнорируем ошибку
+			defer os.Rename(tmpPath, origPath) // Тест: игнорируем ошибку
 		} else {
 			t.Skip("Template file not found, skipping test")
 		}
@@ -491,15 +484,7 @@ func TestLoadTemplate(t *testing.T) {
 		}
 	}
 
-	oldWd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get current directory: %v", err)
-	}
-	err = os.Chdir(projectRoot)
-	if err != nil {
-		t.Fatalf("Failed to change to project root: %v", err)
-	}
-	defer os.Chdir(oldWd) //nolint:errcheck // Восстанавливаем директорию
+	t.Chdir(projectRoot)
 
 	tmpDir := t.TempDir()
 
@@ -527,8 +512,8 @@ func TestLoadTemplate(t *testing.T) {
 		tmpPath := filepath.Join("templates", "kanban.html.bak")
 
 		if _, err := os.Stat(origPath); err == nil {
-			os.Rename(origPath, tmpPath) //nolint:errcheck // Тест
-			defer os.Rename(tmpPath, origPath) //nolint:errcheck // Тест
+			os.Rename(origPath, tmpPath) // Тест: игнорируем ошибку
+			defer os.Rename(tmpPath, origPath) // Тест: игнорируем ошибку
 		} else {
 			t.Skip("Template file not found, skipping test")
 		}
@@ -555,15 +540,7 @@ func TestRefreshSessionsCache(t *testing.T) {
 		}
 	}
 
-	oldWd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get current directory: %v", err)
-	}
-	err = os.Chdir(projectRoot)
-	if err != nil {
-		t.Fatalf("Failed to change to project root: %v", err)
-	}
-	defer os.Chdir(oldWd) //nolint:errcheck // Восстанавливаем директорию
+	t.Chdir(projectRoot)
 
 	tmpDir := t.TempDir()
 
@@ -598,10 +575,22 @@ func TestRefreshSessionsCache(t *testing.T) {
 
 		server.cacheMu.RLock()
 		cacheLen := len(server.sessionsCache)
-		server.cacheMu.RUnlock()
-
 		if cacheLen != 1 {
+			server.cacheMu.RUnlock()
 			t.Errorf("refreshSessionsCache() expected 1 session, got %d", cacheLen)
+		} else {
+			// Проверяем новый статус сессии
+			session := server.sessionsCache[0]
+			if session.Status != "active" {
+				server.cacheMu.RUnlock()
+				t.Errorf("refreshSessionsCache() expected status 'active', got %q", session.Status)
+			}
+			// Проверяем счётчики
+			if session.TaskCounts.Pending != 1 {
+				server.cacheMu.RUnlock()
+				t.Errorf("refreshSessionsCache() expected Pending count 1, got %d", session.TaskCounts.Pending)
+			}
+			server.cacheMu.RUnlock()
 		}
 	})
 
@@ -675,15 +664,7 @@ func TestKanbanHandler(t *testing.T) {
 		}
 	}
 
-	oldWd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get current directory: %v", err)
-	}
-	err = os.Chdir(projectRoot)
-	if err != nil {
-		t.Fatalf("Failed to change to project root: %v", err)
-	}
-	defer os.Chdir(oldWd) //nolint:errcheck // Восстанавливаем директорию
+	t.Chdir(projectRoot)
 
 	tmpDir := t.TempDir()
 
@@ -774,8 +755,8 @@ func TestKanbanHandler(t *testing.T) {
 		server.KanbanHandler(w, req)
 
 		body := w.Body.String()
-		if !strings.Contains(body, "No active sessions found") {
-			t.Error("KanbanHandler() should return 'No active sessions found' message")
+		if !strings.Contains(body, "No sessions found") {
+			t.Error("KanbanHandler() should return 'No sessions found.' message")
 		}
 	})
 }
@@ -795,15 +776,7 @@ func TestStop(t *testing.T) {
 		}
 	}
 
-	oldWd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get current directory: %v", err)
-	}
-	err = os.Chdir(projectRoot)
-	if err != nil {
-		t.Fatalf("Failed to change to project root: %v", err)
-	}
-	defer os.Chdir(oldWd) //nolint:errcheck // Восстанавливаем директорию
+	t.Chdir(projectRoot)
 
 	tmpDir := t.TempDir()
 
@@ -838,7 +811,7 @@ func TestStop(t *testing.T) {
 	}
 }
 
-func TestHasActiveTasks(t *testing.T) {
+func TestDetermineSessionStatus(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	server := &Server{
@@ -848,51 +821,68 @@ func TestHasActiveTasks(t *testing.T) {
 		stopRefresh:       make(chan struct{}),
 	}
 
-	t.Run("session with pending tasks", func(t *testing.T) {
+	t.Run("session with pending tasks returns active", func(t *testing.T) {
 		session := SessionData{
 			Pending:    "<div>Task</div>",
 			InProgress: "",
 			Completed:  "",
 		}
 
-		if !server.hasActiveTasks(session) {
-			t.Error("hasActiveTasks() should return true for pending tasks")
+		status := server.determineSessionStatus(session)
+		if status != "active" {
+			t.Errorf("determineSessionStatus() expected 'active', got %q", status)
 		}
 	})
 
-	t.Run("session with in_progress tasks", func(t *testing.T) {
+	t.Run("session with in_progress tasks returns active", func(t *testing.T) {
 		session := SessionData{
 			Pending:    "",
 			InProgress: "<div>Task</div>",
 			Completed:  "",
 		}
 
-		if !server.hasActiveTasks(session) {
-			t.Error("hasActiveTasks() should return true for in_progress tasks")
+		status := server.determineSessionStatus(session)
+		if status != "active" {
+			t.Errorf("determineSessionStatus() expected 'active', got %q", status)
 		}
 	})
 
-	t.Run("session with only completed tasks", func(t *testing.T) {
+	t.Run("session with pending and in_progress returns active", func(t *testing.T) {
+		session := SessionData{
+			Pending:    "<div>Task</div>",
+			InProgress: "<div>Task</div>",
+			Completed:  "",
+		}
+
+		status := server.determineSessionStatus(session)
+		if status != "active" {
+			t.Errorf("determineSessionStatus() expected 'active', got %q", status)
+		}
+	})
+
+	t.Run("session with only completed tasks returns completed", func(t *testing.T) {
 		session := SessionData{
 			Pending:    "",
 			InProgress: "",
 			Completed:  "<div>Task</div>",
 		}
 
-		if server.hasActiveTasks(session) {
-			t.Error("hasActiveTasks() should return false for completed-only tasks")
+		status := server.determineSessionStatus(session)
+		if status != "completed" {
+			t.Errorf("determineSessionStatus() expected 'completed', got %q", status)
 		}
 	})
 
-	t.Run("empty session", func(t *testing.T) {
+	t.Run("empty session returns inactive", func(t *testing.T) {
 		session := SessionData{
 			Pending:    "",
 			InProgress: "",
 			Completed:  "",
 		}
 
-		if server.hasActiveTasks(session) {
-			t.Error("hasActiveTasks() should return false for empty session")
+		status := server.determineSessionStatus(session)
+		if status != "inactive" {
+			t.Errorf("determineSessionStatus() expected 'inactive', got %q", status)
 		}
 	})
 }
