@@ -563,7 +563,7 @@ func TestRefreshSessionsCache(t *testing.T) {
 		jsonContent := `{
 			"sessionId": "active-session",
 			"todos": [
-				{"content": "Task 1", "status": "pending"}
+				{"content": "Task 1", "status": "in_progress"}
 			]
 		}`
 		err = os.WriteFile(filepath.Join(tmpDir, "active.json"), []byte(jsonContent), 0644)
@@ -594,16 +594,68 @@ func TestRefreshSessionsCache(t *testing.T) {
 			server.cacheMu.RUnlock()
 			t.Errorf("refreshSessionsCache() expected 1 session, got %d", cacheLen)
 		} else {
-			// Проверяем новый статус сессии
+			// Проверяем новый статус сессии (active = есть in_progress)
 			session := server.sessionsCache[0]
 			if session.Status != "active" {
 				server.cacheMu.RUnlock()
 				t.Errorf("refreshSessionsCache() expected status 'active', got %q", session.Status)
 			}
 			// Проверяем счётчики
-			if session.TaskCounts.Pending != 1 {
+			if session.TaskCounts.InProgress != 1 {
 				server.cacheMu.RUnlock()
-				t.Errorf("refreshSessionsCache() expected Pending count 1, got %d", session.TaskCounts.Pending)
+				t.Errorf("refreshSessionsCache() expected InProgress count 1, got %d", session.TaskCounts.InProgress)
+			}
+			server.cacheMu.RUnlock()
+		}
+	})
+
+	t.Run("cache with inactive sessions (pending only)", func(t *testing.T) {
+		tmpDir3 := t.TempDir()
+
+		jsonContent := `{
+			"sessionId": "inactive-session",
+			"todos": [
+				{"content": "Task 1", "status": "pending"},
+				{"content": "Task 2", "status": "pending"}
+			]
+		}`
+		err := os.WriteFile(filepath.Join(tmpDir3, "inactive.json"), []byte(jsonContent), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+
+		server := &Server{
+			todoDir:           tmpDir3,
+			refreshInterval:   time.Second * 2,
+			uiRefreshInterval: 5,
+			stopRefresh:       make(chan struct{}),
+		}
+
+		err = server.loadTemplate()
+		if err != nil {
+			t.Fatalf("loadTemplate() error = %v", err)
+		}
+
+		err = server.refreshSessionsCache()
+		if err != nil {
+			t.Errorf("refreshSessionsCache() error = %v", err)
+		}
+
+		server.cacheMu.RLock()
+		cacheLen := len(server.sessionsCache)
+		if cacheLen != 1 {
+			server.cacheMu.RUnlock()
+			t.Errorf("refreshSessionsCache() expected 1 session, got %d", cacheLen)
+		} else {
+			// Проверяем, что сессия имеет статус inactive (только pending, без in_progress)
+			session := server.sessionsCache[0]
+			if session.Status != "inactive" {
+				server.cacheMu.RUnlock()
+				t.Errorf("refreshSessionsCache() expected status 'inactive', got %q", session.Status)
+			}
+			if session.TaskCounts.Pending != 2 {
+				server.cacheMu.RUnlock()
+				t.Errorf("refreshSessionsCache() expected Pending count 2, got %d", session.TaskCounts.Pending)
 			}
 			server.cacheMu.RUnlock()
 		}
@@ -844,7 +896,7 @@ func TestDetermineSessionStatus(t *testing.T) {
 		stopRefresh:       make(chan struct{}),
 	}
 
-	t.Run("session with pending tasks returns active", func(t *testing.T) {
+	t.Run("session with only pending tasks returns inactive", func(t *testing.T) {
 		session := SessionData{
 			Pending:    []Task{{Content: "Task", Status: "pending"}},
 			InProgress: []Task{},
@@ -852,8 +904,8 @@ func TestDetermineSessionStatus(t *testing.T) {
 		}
 
 		status := server.determineSessionStatus(session)
-		if status != "active" {
-			t.Errorf("determineSessionStatus() expected 'active', got %q", status)
+		if status != "inactive" {
+			t.Errorf("determineSessionStatus() expected 'inactive', got %q", status)
 		}
 	})
 

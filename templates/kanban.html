@@ -710,10 +710,11 @@
 
         // Рендеринг колонки с задачами
         function renderColumn(tasks, header, count) {
+            // Обрабатываем null/undefined задачи
+            if (!tasks || tasks.length === 0) return '';
+
             const taskHtml = tasks.map(task => {
-                let status = 'pending';
-                if (task.status === 'in_progress') status = 'in_progress';
-                else if (task.status === 'completed') status = 'completed';
+                let status = task.status || 'pending';
                 return renderTaskCard(task, status);
             }).join('');
             

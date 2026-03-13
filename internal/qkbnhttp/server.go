@@ -242,12 +242,16 @@ func (s *Server) determineSessionStatus(session SessionData) string {
 	hasCompleted := len(session.Completed) > 0
 
 	switch {
-	case hasInProgress || hasPending:
+	// Active: есть задачи в работе
+	case hasInProgress:
 		return "active"
+	// Inactive: есть только pending задачи (нет in_progress)
 	case hasPending && !hasInProgress:
 		return "inactive"
+	// Completed: только завершенные задачи
 	case hasCompleted && !hasPending && !hasInProgress:
 		return "completed"
+	// Пустая сессия
 	default:
 		return "inactive"
 	}
@@ -370,7 +374,10 @@ func (s *Server) processSessionFile(filePath string) (SessionData, error) {
 
 	var pendingHTML, inProgressHTML, completedHTML strings.Builder
 	var counts TaskCounts
-	var pendingTasks, inProgressTasks, completedTasks []Task
+	// Инициализируем пустые срезы, чтобы они не стали null в JSON
+	pendingTasks := make([]Task, 0)
+	inProgressTasks := make([]Task, 0)
+	completedTasks := make([]Task, 0)
 
 	// Распределяем карточки по колонкам
 	for _, task := range jsonData.Todos {
