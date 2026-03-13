@@ -20,3 +20,6 @@ dist/
 content/
 .jtpost.db
 cover.html
+
+.qwen/
+gha-creds-*.json
