@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Qwen-code Kanban Board</title>
-    <meta http-equiv="refresh" content="{{.UIRefreshInterval}}">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -115,6 +114,35 @@
             padding: 2rem;
             max-width: 1400px;
             margin: 0 auto;
+        }
+
+        /* Индикатор последнего обновления */
+        .last-updated {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-align: right;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 0.5rem;
+        }
+
+        .last-updated-dot {
+            width: 6px;
+            height: 6px;
+            background-color: var(--active-color);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .last-updated.error {
+            color: #ef4444;
+        }
+
+        .last-updated.error .last-updated-dot {
+            background-color: #ef4444;
+            animation: none;
         }
 
         /* Скрываем секции по умолчанию */
@@ -319,6 +347,134 @@
             .navbar-nav { width: 100%; justify-content: space-between; gap: 0; }
             .nav-link { padding-bottom: 0.5rem; }
         }
+
+        /* Модальное окно для "Новая задача" */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+
+        .modal-overlay.visible {
+            display: flex;
+            opacity: 1;
+        }
+
+        .modal {
+            background: var(--card-bg);
+            border-radius: var(--border-radius-lg);
+            padding: 2rem;
+            max-width: 450px;
+            width: 90%;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            transform: translateY(-20px);
+            transition: transform 0.2s ease;
+        }
+
+        .modal-overlay.visible .modal {
+            transform: translateY(0);
+        }
+
+        .modal-header {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text-main);
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .modal-body {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            line-height: 1.6;
+            margin-bottom: 1.5rem;
+        }
+
+        .modal-body code {
+            background: #f1f5f9;
+            color: var(--primary-color);
+            padding: 0.125rem 0.375rem;
+            border-radius: 4px;
+            font-family: ui-monospace, monospace;
+            font-size: 0.8125rem;
+        }
+
+        .modal-body ol {
+            margin: 0.75rem 0;
+            padding-left: 1.25rem;
+        }
+
+        .modal-body li {
+            margin-bottom: 0.5rem;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 0.75rem;
+            justify-content: flex-end;
+        }
+
+        .btn {
+            padding: 0.625rem 1.25rem;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+            font-family: inherit;
+        }
+
+        .btn-primary {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #1d4ed8;
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary {
+            background: #f1f5f9;
+            color: var(--text-main);
+        }
+
+        .btn-secondary:hover {
+            background: #e2e8f0;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: var(--text-main);
+            color: white;
+            padding: 0.75rem 1.25rem;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            transform: translateY(100%);
+            opacity: 0;
+            transition: all 0.3s ease;
+            z-index: 1001;
+        }
+
+        .toast.visible {
+            transform: translateY(0);
+            opacity: 1;
+        }
     </style>
 </head>
 <body>
@@ -336,6 +492,12 @@
             <li><a class="nav-link" data-target="completed-sessions">✅ Завершенные</a></li>
         </ul>
     </header>
+
+    <!-- Индикатор последнего обновления -->
+    <div class="last-updated" id="last-updated">
+        <div class="last-updated-dot"></div>
+        <span>Обновление...</span>
+    </div>
 
     <main>
         <!-- СЕКЦИЯ 1: АКТИВНЫЕ СЕССИИ -->
@@ -358,8 +520,8 @@
                                 <span>Todo (Pending)</span>
                                 <span class="task-count">{{.TaskCounts.Pending}}</span>
                             </div>
-                            {{.Pending}}
-                            <button class="btn-add-task">
+                            {{.PendingHTML}}
+                            <button class="btn-add-task" onclick="showNewTaskTooltip()">
                                 <span style="font-size: 1.1em;">+</span> Новая задача <code>todowrite</code>
                             </button>
                         </div>
@@ -368,14 +530,14 @@
                                 <span>In Progress</span>
                                 <span class="task-count">{{.TaskCounts.InProgress}}</span>
                             </div>
-                            {{.InProgress}}
+                            {{.InProgressHTML}}
                         </div>
                         <div class="column">
                             <div class="col-header">
                                 <span>Done (Completed)</span>
                                 <span class="task-count">{{.TaskCounts.Completed}}</span>
                             </div>
-                            {{.Completed}}
+                            {{.CompletedHTML}}
                         </div>
                     </div>
                 </div>
@@ -404,8 +566,8 @@
                                 <span>Todo (Pending)</span>
                                 <span class="task-count">{{.TaskCounts.Pending}}</span>
                             </div>
-                            {{.Pending}}
-                            <button class="btn-add-task">
+                            {{.PendingHTML}}
+                            <button class="btn-add-task" onclick="showNewTaskTooltip()">
                                 <span style="font-size: 1.1em;">+</span> Новая задача <code>todowrite</code>
                             </button>
                         </div>
@@ -462,7 +624,7 @@
                                 <span>Done (Completed)</span>
                                 <span class="task-count">{{.TaskCounts.Completed}}</span>
                             </div>
-                            {{.Completed}}
+                            {{.CompletedHTML}}
                         </div>
                     </div>
                 </div>
@@ -473,9 +635,176 @@
         </div>
     </main>
 
-    <!-- СКРИПТ ДЛЯ РАБОТЫ ВКЛАДОК -->
+    <!-- СКРИПТ ДЛЯ РАБОТЫ ВКЛАДОК И SPA -->
     <script>
-        document.addEventListener('DOMContentLoaded', () => {
+        // Конфигурация
+        const UI_REFRESH_INTERVAL = {{.UIRefreshInterval}} * 1000; // мс
+        const API_URL = '/api/sessions';
+
+        // Состояние
+        let activeTab = 'active-sessions';
+        let retryCount = 0;
+        const MAX_RETRIES = 3;
+        const RETRY_DELAY = 5000;
+
+        // Сохранение активной вкладки
+        function setActiveTab(tabId) {
+            activeTab = tabId;
+            localStorage.setItem('qkbn-active-tab', tabId);
+        }
+
+        // Восстановление активной вкладки
+        function restoreActiveTab() {
+            const savedTab = localStorage.getItem('qkbn-active-tab');
+            if (savedTab) {
+                const navLink = document.querySelector(`.nav-link[data-target="${savedTab}"]`);
+                if (navLink) {
+                    // Убираем активный класс у всех ссылок
+                    document.querySelectorAll('.nav-link').forEach(nav => nav.classList.remove('active'));
+                    // Убираем класс отображения у всех секций
+                    document.querySelectorAll('.section').forEach(sec => sec.classList.remove('active-section'));
+                    
+                    // Активируем сохранённую вкладку
+                    navLink.classList.add('active');
+                    document.getElementById(savedTab).classList.add('active-section');
+                    activeTab = savedTab;
+                    return;
+                }
+            }
+            
+            // По умолчанию активна первая вкладка
+            const firstLink = document.querySelector('.nav-link.active');
+            if (firstLink) {
+                activeTab = firstLink.getAttribute('data-target');
+            }
+        }
+
+        // Обновление индикатора последнего обновления
+        function updateLastUpdated(isError = false) {
+            const indicator = document.getElementById('last-updated');
+            const textSpan = indicator.querySelector('span');
+            
+            if (isError) {
+                indicator.classList.add('error');
+                textSpan.textContent = 'Ошибка подключения';
+            } else {
+                indicator.classList.remove('error');
+                const now = new Date();
+                textSpan.textContent = `Обновлено: ${now.toLocaleTimeString('ru-RU')}`;
+            }
+        }
+
+        // Рендеринг карточки задачи
+        function renderTaskCard(task, status) {
+            const completedClass = status === 'completed' ? ' completed' : '';
+            const actionHtml = task.activeForm ? `<div class='card-action'>⚡ ${task.activeForm}</div>` : '';
+            const textDecoration = status === 'completed' ? ' style="text-decoration: line-through;"' : '';
+            
+            return `
+                <div class='card${completedClass}'${textDecoration}>
+                    <div class='card-title'>${task.content || 'No description'}</div>
+                    ${actionHtml}
+                </div>
+            `;
+        }
+
+        // Рендеринг колонки с задачами
+        function renderColumn(tasks, header, count) {
+            const taskHtml = tasks.map(task => {
+                let status = 'pending';
+                if (task.status === 'in_progress') status = 'in_progress';
+                else if (task.status === 'completed') status = 'completed';
+                return renderTaskCard(task, status);
+            }).join('');
+            
+            const addTaskButton = header.includes('Todo') ? `
+                <button class="btn-add-task" onclick="showNewTaskTooltip()">
+                    <span style="font-size: 1.1em;">+</span> Новая задача <code>todowrite</code>
+                </button>
+            ` : '';
+            
+            return `
+                <div class="column">
+                    <div class="col-header">
+                        <span>${header}</span>
+                        <span class="task-count">${count}</span>
+                    </div>
+                    ${taskHtml}
+                    ${addTaskButton}
+                </div>
+            `;
+        }
+
+        // Рендеринг сессии
+        function renderSession(session, statusClass, badgeText, showPulse = false) {
+            const pulseHtml = showPulse ? `<div class="pulse-dot"></div>` : '';
+            
+            return `
+                <div class="session ${statusClass}">
+                    <div class="session-header">
+                        <div>
+                            <span class="session-id">${session.ID}</span>
+                        </div>
+                        <div class="status-badge ${statusClass}">
+                            ${pulseHtml}
+                            ${badgeText}
+                        </div>
+                    </div>
+                    <div class="board">
+                        ${renderColumn(session.Pending || [], 'Todo (Pending)', session.TaskCounts?.Pending || 0)}
+                        ${renderColumn(session.InProgress || [], 'In Progress', session.TaskCounts?.InProgress || 0)}
+                        ${renderColumn(session.Completed || [], 'Done (Completed)', session.TaskCounts?.Completed || 0)}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Обновление контента секции
+        function updateSection(sectionId, sessions, statusClass, badgeText, showPulse = false) {
+            const section = document.getElementById(sectionId);
+            if (!section) return;
+            
+            if (sessions && sessions.length > 0) {
+                const html = sessions.map(session => 
+                    renderSession(session, statusClass, badgeText, showPulse)
+                ).join('');
+                section.innerHTML = html;
+            } else {
+                section.innerHTML = `<p style="text-align: center; color: var(--text-muted); padding: 2rem;">Нет сессий</p>`;
+            }
+        }
+
+        // Fetch данных с API
+        async function fetchSessions() {
+            try {
+                const response = await fetch(API_URL);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                // Обновляем все секции
+                updateSection('active-sessions', data.activeSessions, 'active', 'В работе', true);
+                updateSection('inactive-sessions', data.inactiveSessions, 'inactive', 'Ожидает');
+                updateSection('completed-sessions', data.completedSessions, 'completed', 'Выполнено');
+                
+                updateLastUpdated(false);
+                retryCount = 0;
+            } catch (error) {
+                console.error('Ошибка получения данных:', error);
+                updateLastUpdated(true);
+                
+                // Retry logic
+                retryCount++;
+                if (retryCount <= MAX_RETRIES) {
+                    setTimeout(() => fetchSessions(), RETRY_DELAY);
+                }
+            }
+        }
+
+        // Переключение вкладок
+        function initTabs() {
             const navLinks = document.querySelectorAll('.nav-link');
             const sections = document.querySelectorAll('.section');
 
@@ -491,12 +820,126 @@
                     // Добавляем активный класс нажатой ссылке
                     link.classList.add('active');
 
-                    // Показываем нужную секцию
+                    // Показываем нужную секцию и сохраняем
                     const targetId = link.getAttribute('data-target');
                     document.getElementById(targetId).classList.add('active-section');
+                    setActiveTab(targetId);
                 });
             });
+        }
+
+        // Инициализация
+        document.addEventListener('DOMContentLoaded', () => {
+            // Восстанавливаем активную вкладку
+            restoreActiveTab();
+
+            // Инициализируем переключение вкладок
+            initTabs();
+
+            // Первое получение данных
+            fetchSessions();
+
+            // Запускаем периодическое обновление
+            setInterval(fetchSessions, UI_REFRESH_INTERVAL);
+        });
+
+        // Показ модального окна "Новая задача"
+        function showNewTaskTooltip() {
+            const modal = document.getElementById('new-task-modal');
+            const overlay = document.getElementById('new-task-overlay');
+            modal.classList.add('visible');
+            overlay.classList.add('visible');
+        }
+
+        // Закрытие модального окна
+        function closeNewTaskModal() {
+            const modal = document.getElementById('new-task-modal');
+            const overlay = document.getElementById('new-task-overlay');
+            modal.classList.remove('visible');
+            overlay.classList.remove('visible');
+        }
+
+        // Копирование команды в буфер
+        function copyTodowriteCommand() {
+            const command = '/todowrite';
+            navigator.clipboard.writeText(command).then(() => {
+                showToast('Команда скопирована в буфер!');
+                closeNewTaskModal();
+            }).catch(err => {
+                console.error('Ошибка копирования:', err);
+                // Fallback для старых браузеров
+                const textArea = document.createElement('textarea');
+                textArea.value = command;
+                textArea.style.position = 'fixed';
+                textArea.style.left = '-9999px';
+                document.body.appendChild(textArea);
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    showToast('Команда скопирована в буфер!');
+                    closeNewTaskModal();
+                } catch (e) {
+                    console.error('Не удалось скопировать:', e);
+                }
+                document.body.removeChild(textArea);
+            });
+        }
+
+        // Показ уведомления (toast)
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.querySelector('span').textContent = message;
+            toast.classList.add('visible');
+            setTimeout(() => {
+                toast.classList.remove('visible');
+            }, 3000);
+        }
+
+        // Закрытие по клику на overlay
+        document.addEventListener('DOMContentLoaded', () => {
+            const overlay = document.getElementById('new-task-overlay');
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    closeNewTaskModal();
+                }
+            });
+        });
+
+        // Закрытие по Esc
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeNewTaskModal();
+            }
         });
     </script>
+
+    <!-- Модальное окно "Новая задача" -->
+    <div class="modal-overlay" id="new-task-overlay">
+        <div class="modal" id="new-task-modal">
+            <div class="modal-header">
+                <span>➕</span> Новая задача
+            </div>
+            <div class="modal-body">
+                <p>Для добавления новой задачи используйте команду <code>/todowrite</code> в чате Qwen-code.</p>
+                <p><strong>Примеры использования:</strong></p>
+                <ol>
+                    <li><code>/todowrite Добавить тесты</code> — добавить задачу</li>
+                    <li><code>/todowrite done 1</code> — завершить задачу №1</li>
+                    <li><code>/todowrite move 1 in_progress</code> — переместить задачу №1</li>
+                </ol>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeNewTaskModal()">Отмена</button>
+                <button class="btn btn-primary" onclick="copyTodowriteCommand()">
+                    📋 Копировать команду
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Уведомление (toast) -->
+    <div class="toast" id="toast">
+        <span></span>
+    </div>
 </body>
 </html>

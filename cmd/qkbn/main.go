@@ -112,6 +112,7 @@ func main() {
 	}()
 
 	http.HandleFunc("/", server.KanbanHandler)
+	http.HandleFunc("/api/sessions", server.SessionsAPIHandler)
 
 	addr := ":" + strconv.Itoa(*port)
 

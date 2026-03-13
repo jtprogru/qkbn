@@ -238,17 +238,28 @@ func TestProcessSessionFile(t *testing.T) {
 			t.Errorf("processSessionFile() ID = %q, want test-session-123", result.ID)
 		}
 
-		// Проверяем, что карточки распределены по колонкам
-		if !strings.Contains(string(result.Pending), "Task 1") {
+		// Проверяем, что задачи распределены по массивам
+		if len(result.Pending) != 1 || result.Pending[0].Content != "Task 1" {
 			t.Error("processSessionFile() Pending should contain Task 1")
 		}
 
-		if !strings.Contains(string(result.InProgress), "Task 2") {
+		if len(result.InProgress) != 1 || result.InProgress[0].Content != "Task 2" {
 			t.Error("processSessionFile() InProgress should contain Task 2")
 		}
 
-		if !strings.Contains(string(result.Completed), "Task 3") {
+		if len(result.Completed) != 1 || result.Completed[0].Content != "Task 3" {
 			t.Error("processSessionFile() Completed should contain Task 3")
+		}
+
+		// Проверяем счётчики
+		if result.TaskCounts.Pending != 1 {
+			t.Errorf("processSessionFile() Pending count = %d, want 1", result.TaskCounts.Pending)
+		}
+		if result.TaskCounts.InProgress != 1 {
+			t.Errorf("processSessionFile() InProgress count = %d, want 1", result.TaskCounts.InProgress)
+		}
+		if result.TaskCounts.Completed != 1 {
+			t.Errorf("processSessionFile() Completed count = %d, want 1", result.TaskCounts.Completed)
 		}
 	})
 
@@ -294,7 +305,7 @@ func TestProcessSessionFile(t *testing.T) {
 			t.Fatalf("processSessionFile() error = %v", err)
 		}
 
-		if !strings.Contains(string(result.Pending), "No description") {
+		if len(result.Pending) != 1 || result.Pending[0].Content != "No description" {
 			t.Error("processSessionFile() should use 'No description' for empty content")
 		}
 	})
@@ -320,7 +331,7 @@ func TestProcessSessionFile(t *testing.T) {
 			t.Fatalf("processSessionFile() error = %v", err)
 		}
 
-		if !strings.Contains(string(result.Pending), "Task") {
+		if len(result.Pending) != 1 || result.Pending[0].Content != "Task" {
 			t.Error("processSessionFile() should default empty status to pending")
 		}
 	})
@@ -374,12 +385,16 @@ func TestProcessSessionFile(t *testing.T) {
 		}
 
 		// Проверяем, что сессия имеет только completed задачи
-		if len(string(result.Pending)) > 0 {
+		if len(result.Pending) > 0 {
 			t.Error("Completed-only session should have empty Pending")
 		}
 
-		if len(string(result.InProgress)) > 0 {
+		if len(result.InProgress) > 0 {
 			t.Error("Completed-only session should have empty InProgress")
+		}
+
+		if len(result.Completed) != 2 {
+			t.Error("Completed-only session should have 2 completed tasks")
 		}
 
 		// Проверяем статус сессии через determineSessionStatus
@@ -627,10 +642,17 @@ func TestRefreshSessionsCache(t *testing.T) {
 
 		server.cacheMu.RLock()
 		cacheLen := len(server.sessionsCache)
-		server.cacheMu.RUnlock()
-
-		if cacheLen != 0 {
-			t.Errorf("refreshSessionsCache() expected 0 sessions (all completed), got %d", cacheLen)
+		if cacheLen != 1 {
+			server.cacheMu.RUnlock()
+			t.Errorf("refreshSessionsCache() expected 1 session (completed are now stored), got %d", cacheLen)
+		} else {
+			// Проверяем, что сессия имеет статус completed
+			session := server.sessionsCache[0]
+			if session.Status != "completed" {
+				server.cacheMu.RUnlock()
+				t.Errorf("refreshSessionsCache() expected status 'completed', got %q", session.Status)
+			}
+			server.cacheMu.RUnlock()
 		}
 	})
 
@@ -755,8 +777,9 @@ func TestKanbanHandler(t *testing.T) {
 		server.KanbanHandler(w, req)
 
 		body := w.Body.String()
-		if !strings.Contains(body, "No sessions found") {
-			t.Error("KanbanHandler() should return 'No sessions found.' message")
+		// Проверяем, что есть сообщение о пустых секциях
+		if !strings.Contains(body, "Нет сессий") {
+			t.Error("KanbanHandler() should return 'Нет сессий' message for empty directory")
 		}
 	})
 }
@@ -823,9 +846,9 @@ func TestDetermineSessionStatus(t *testing.T) {
 
 	t.Run("session with pending tasks returns active", func(t *testing.T) {
 		session := SessionData{
-			Pending:    "<div>Task</div>",
-			InProgress: "",
-			Completed:  "",
+			Pending:    []Task{{Content: "Task", Status: "pending"}},
+			InProgress: []Task{},
+			Completed:  []Task{},
 		}
 
 		status := server.determineSessionStatus(session)
@@ -836,9 +859,9 @@ func TestDetermineSessionStatus(t *testing.T) {
 
 	t.Run("session with in_progress tasks returns active", func(t *testing.T) {
 		session := SessionData{
-			Pending:    "",
-			InProgress: "<div>Task</div>",
-			Completed:  "",
+			Pending:    []Task{},
+			InProgress: []Task{{Content: "Task", Status: "in_progress"}},
+			Completed:  []Task{},
 		}
 
 		status := server.determineSessionStatus(session)
@@ -849,9 +872,9 @@ func TestDetermineSessionStatus(t *testing.T) {
 
 	t.Run("session with pending and in_progress returns active", func(t *testing.T) {
 		session := SessionData{
-			Pending:    "<div>Task</div>",
-			InProgress: "<div>Task</div>",
-			Completed:  "",
+			Pending:    []Task{{Content: "Task", Status: "pending"}},
+			InProgress: []Task{{Content: "Task", Status: "in_progress"}},
+			Completed:  []Task{},
 		}
 
 		status := server.determineSessionStatus(session)
@@ -862,9 +885,9 @@ func TestDetermineSessionStatus(t *testing.T) {
 
 	t.Run("session with only completed tasks returns completed", func(t *testing.T) {
 		session := SessionData{
-			Pending:    "",
-			InProgress: "",
-			Completed:  "<div>Task</div>",
+			Pending:    []Task{},
+			InProgress: []Task{},
+			Completed:  []Task{{Content: "Task", Status: "completed"}},
 		}
 
 		status := server.determineSessionStatus(session)
@@ -875,9 +898,9 @@ func TestDetermineSessionStatus(t *testing.T) {
 
 	t.Run("empty session returns inactive", func(t *testing.T) {
 		session := SessionData{
-			Pending:    "",
-			InProgress: "",
-			Completed:  "",
+			Pending:    []Task{},
+			InProgress: []Task{},
+			Completed:  []Task{},
 		}
 
 		status := server.determineSessionStatus(session)

@@ -41,12 +41,15 @@ type Data struct {
 
 // SessionData представляет данные одной сессии для отображения.
 type SessionData struct {
-	ID           string
-	Pending      template.HTML
-	InProgress   template.HTML
-	Completed    template.HTML
-	Status       string // "active", "inactive", "completed"
-	TaskCounts   TaskCounts
+	ID           string     `json:"id"`
+	Pending      []Task     `json:"pending"`
+	InProgress   []Task     `json:"inProgress"`
+	Completed    []Task     `json:"completed"`
+	Status       string     `json:"status"` // "active", "inactive", "completed"
+	TaskCounts   TaskCounts `json:"taskCounts"`
+	PendingHTML  template.HTML
+	InProgressHTML template.HTML
+	CompletedHTML  template.HTML
 }
 
 // TaskCounts хранит счётчики задач по колонкам.
@@ -54,6 +57,14 @@ type TaskCounts struct {
 	Pending    int
 	InProgress int
 	Completed  int
+}
+
+// SessionsAPIResponse представляет ответ API для сессий.
+type SessionsAPIResponse struct {
+	ActiveSessions    []SessionData `json:"activeSessions"`
+	InactiveSessions  []SessionData `json:"inactiveSessions"`
+	CompletedSessions []SessionData `json:"completedSessions"`
+	LastUpdated       string        `json:"lastUpdated"`
 }
 
 // PageData представляет данные для шаблона страницы.
@@ -120,12 +131,6 @@ func (s *Server) KanbanHandler(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
-	// Если совсем нет сессий
-	if len(activeSessions) == 0 && len(inactiveSessions) == 0 && len(completedSessions) == 0 {
-		fmt.Fprintf(w, "No sessions found.")
-		return
-	}
-
 	s.mu.RLock()
 	tmpl := s.template
 	s.mu.RUnlock()
@@ -147,6 +152,42 @@ func (s *Server) KanbanHandler(w http.ResponseWriter, _ *http.Request) {
 // Stop останавливает фоновое обновление кэша.
 func (s *Server) Stop() {
 	close(s.stopRefresh)
+}
+
+// SessionsAPIHandler обрабатывает запросы к API сессий.
+func (s *Server) SessionsAPIHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Получаем сессии из кэша
+	s.cacheMu.RLock()
+	sessions := s.sessionsCache
+	s.cacheMu.RUnlock()
+
+	// Группируем сессии по статусу
+	var activeSessions, inactiveSessions, completedSessions []SessionData
+	for _, session := range sessions {
+		switch session.Status {
+		case "active":
+			activeSessions = append(activeSessions, session)
+		case "inactive":
+			inactiveSessions = append(inactiveSessions, session)
+		case "completed":
+			completedSessions = append(completedSessions, session)
+		}
+	}
+
+	response := SessionsAPIResponse{
+		ActiveSessions:    activeSessions,
+		InactiveSessions:  inactiveSessions,
+		CompletedSessions: completedSessions,
+		LastUpdated:       time.Now().Format(time.RFC3339),
+	}
+
+	err := json.NewEncoder(w).Encode(response)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "%v"}`, err)
+	}
 }
 
 // startRefreshLoop периодически обновляет кэш сессий.
@@ -179,15 +220,11 @@ func (s *Server) refreshSessionsCache() error {
 			continue // Пропускаем проблемные файлы
 		}
 
-		// Определяем статус сессии и фильтруем
+		// Определяем статус сессии
 		status := s.determineSessionStatus(sessionData)
 		sessionData.Status = status
 
-		// Пропускаем сессии без активных задач (только completed)
-		if status == "completed" {
-			continue
-		}
-
+		// Сохраняем все сессии (группировка будет в хендлере)
 		sessions = append(sessions, sessionData)
 	}
 
@@ -200,9 +237,9 @@ func (s *Server) refreshSessionsCache() error {
 
 // determineSessionStatus определяет статус сессии на основе задач.
 func (s *Server) determineSessionStatus(session SessionData) string {
-	hasPending := len(string(session.Pending)) > 0
-	hasInProgress := len(string(session.InProgress)) > 0
-	hasCompleted := len(string(session.Completed)) > 0
+	hasPending := len(session.Pending) > 0
+	hasInProgress := len(session.InProgress) > 0
+	hasCompleted := len(session.Completed) > 0
 
 	switch {
 	case hasInProgress || hasPending:
@@ -331,8 +368,9 @@ func (s *Server) processSessionFile(filePath string) (SessionData, error) {
 		return SessionData{}, err
 	}
 
-	var pending, inProgress, completed strings.Builder
+	var pendingHTML, inProgressHTML, completedHTML strings.Builder
 	var counts TaskCounts
+	var pendingTasks, inProgressTasks, completedTasks []Task
 
 	// Распределяем карточки по колонкам
 	for _, task := range jsonData.Todos {
@@ -348,6 +386,13 @@ func (s *Server) processSessionFile(filePath string) (SessionData, error) {
 			status = "pending"
 		}
 
+		// Создаём копию задачи для JSON
+		taskCopy := Task{
+			Content:    content,
+			ActiveForm: action,
+			Status:     status,
+		}
+
 		cardHTML := fmt.Sprintf("<div class='card'><div class='card-title'>%s</div>", content)
 
 		if action != "" {
@@ -358,14 +403,17 @@ func (s *Server) processSessionFile(filePath string) (SessionData, error) {
 
 		switch status {
 		case "pending":
-			pending.WriteString(cardHTML)
+			pendingHTML.WriteString(cardHTML)
 			counts.Pending++
+			pendingTasks = append(pendingTasks, taskCopy)
 		case "in_progress":
-			inProgress.WriteString(cardHTML)
+			inProgressHTML.WriteString(cardHTML)
 			counts.InProgress++
+			inProgressTasks = append(inProgressTasks, taskCopy)
 		case "completed":
-			completed.WriteString(cardHTML)
+			completedHTML.WriteString(cardHTML)
 			counts.Completed++
+			completedTasks = append(completedTasks, taskCopy)
 		}
 	}
 
@@ -377,10 +425,13 @@ func (s *Server) processSessionFile(filePath string) (SessionData, error) {
 	}
 
 	return SessionData{
-		ID:         sessionID,
-		Pending:    template.HTML(pending.String()),    //nolint:gosec // Доверенный источник
-		InProgress: template.HTML(inProgress.String()), //nolint:gosec // Доверенный источник
-		Completed:  template.HTML(completed.String()),  //nolint:gosec // Доверенный источник
-		TaskCounts: counts,
+		ID:             sessionID,
+		Pending:        pendingTasks,
+		InProgress:     inProgressTasks,
+		Completed:      completedTasks,
+		PendingHTML:    template.HTML(pendingHTML.String()),    //nolint:gosec // Доверенный источник
+		InProgressHTML: template.HTML(inProgressHTML.String()), //nolint:gosec // Доверенный источник
+		CompletedHTML:  template.HTML(completedHTML.String()),  //nolint:gosec // Доверенный источник
+		TaskCounts:     counts,
 	}, nil
 }
