@@ -738,12 +738,12 @@
         // Рендеринг сессии
         function renderSession(session, statusClass, badgeText, showPulse = false) {
             const pulseHtml = showPulse ? `<div class="pulse-dot"></div>` : '';
-            
+
             return `
                 <div class="session ${statusClass}">
                     <div class="session-header">
                         <div>
-                            <span class="session-id">${session.ID}</span>
+                            <span class="session-id">${session.id || 'Unknown'}</span>
                         </div>
                         <div class="status-badge ${statusClass}">
                             ${pulseHtml}
@@ -751,9 +751,9 @@
                         </div>
                     </div>
                     <div class="board">
-                        ${renderColumn(session.Pending || [], 'Todo (Pending)', session.TaskCounts?.Pending || 0)}
-                        ${renderColumn(session.InProgress || [], 'In Progress', session.TaskCounts?.InProgress || 0)}
-                        ${renderColumn(session.Completed || [], 'Done (Completed)', session.TaskCounts?.Completed || 0)}
+                        ${renderColumn(session.pending || [], 'Todo (Pending)', session.TaskCounts?.Pending || 0)}
+                        ${renderColumn(session.inProgress || [], 'In Progress', session.TaskCounts?.InProgress || 0)}
+                        ${renderColumn(session.completed || [], 'Done (Completed)', session.TaskCounts?.Completed || 0)}
                     </div>
                 </div>
             `;
